@@ -57,3 +57,11 @@ typings/
 # dotenv environment variables file
 .env
 
+# private configuration
+*.config.json
+
+# VS Code config
+.vscode/
+
+# Compiled JS
+src/**/*.js
