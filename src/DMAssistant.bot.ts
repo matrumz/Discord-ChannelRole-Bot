@@ -2,6 +2,7 @@ import DiscordJs = require("discord.js");
 import fs = require("fs");
 import q = require("q");
 import { Language } from "./utils/language";
+import { Types } from "./utils/system";
 
 class LanguageSynthesizer
 {
@@ -52,7 +53,7 @@ class LanguageSynthesizer
         {
             return message.member.roles.exists("name", authRole);
         })) {
-            message.reply("One does not simply create a new language. One should play DnD instead.");
+            message.reply("One does not simply create a new language. One should play DnD instead!");
             return;
         }
 
@@ -68,16 +69,15 @@ class LanguageSynthesizer
             case "synth":
                 args.forEach((arg) =>
                 {
-                    this.synthLanguage(arg).then(
-                        (result) =>
-                        {
-                            command.channel.send('"' + arg + '" has been introduced to the land.')
-                        },
-                        (error) =>
-                        {
-                            command.channel.send('"' + arg + '" is too complex for the land: ' + error);
-                        }
-                    );
+                    this.synthLanguage(arg).then((summary) =>
+                    {
+                        if (summary.InfoMessages.length > 0)
+                            command.channel.send(summary.blockifyMessages("info"));
+                        if (summary.WarningMessages.length > 0)
+                            command.channel.send("WARNING:\n" + summary.blockifyMessages("warn"));
+                        if (summary.ErrorMessages.length > 0)
+                            command.channel.send("ERROR:\n" + summary.blockifyMessages("err"));
+                    });
                 });
                 break;
             case ("mischiefmanaged"):
@@ -87,14 +87,10 @@ class LanguageSynthesizer
         }
     }
 
-    private synthLanguage(lang: string): Promise<boolean>
+    private synthLanguage(lang: string): Promise<Types.System.ProcessSummary>
     {
-        var deferred = q.defer<boolean>();
-
-        let newLang = new Language(lang)
-        newLang.coin(this.UMainiacs);
-
-        return deferred.promise;
+        let newLang = new Language(lang, this.UMainiacs)
+        return newLang.coin();
     }
 }
 

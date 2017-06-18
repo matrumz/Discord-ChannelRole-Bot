@@ -1,16 +1,18 @@
 import DiscordJs = require("discord.js");
 import q = require("q");
+import { Types } from "./system"
 
 export class Language
 {
     /** Currently, the spoken value is not used */
     constructor(
         public name: string,
+        public server: DiscordJs.Guild,
         public isWritten: boolean = true,
         public isSpoken: boolean = false
     )
     {
-        this.langId = "lang-" + this.name;
+        this.langId = ("lang-" + this.name).toLowerCase();
         this.langRoleData = {
             name: this.langId,
             color: "GREY",
@@ -125,60 +127,101 @@ export class Language
     public voiceChannel: DiscordJs.VoiceChannel;
     public role: DiscordJs.Role;
 
-    public coin(server: DiscordJs.Guild): void
+    /** Always resolves */
+    public coin(): Promise<Types.System.ProcessSummary>
     {
-        var promises: Promise<any>[] = [];
-        var promisedTextChannel: Promise<DiscordJs.TextChannel>;
+        var deferred = q.defer<Types.System.ProcessSummary>();
+        var promises: Promise<Types.System.ProcessSummary>[] = [];
 
-        if (this.isWritten && !server.channels.find((channel): boolean =>
+        if (this.isWritten && !this.server.channels.find((channel): boolean =>
         {
             return (channel.name.toLowerCase() === this.langId.toLowerCase()
                 && channel.type === "text")
         })) {
-            promisedTextChannel = server.createChannel(this.langId, "text");
-            this.createAndAttachRoles(promisedTextChannel, this.textChannel);
+            promises.push(this.createLanguageOnServer(this.textChannel, "text"));
         }
+
+        q.all(promises).then(
+            (results) =>
+            {
+                deferred.resolve(results[0]);
+            },
+            (error) =>
+            {
+                deferred.resolve(new Types.System.ProcessSummary([error]));
+            }
+        );
+
+        return deferred.promise;
     }
 
-    private createAndAttachRoles(channelPromise: Promise<DiscordJs.GuildChannel>, saveChannelTo: DiscordJs.GuildChannel): void
+    /** Always resolves */
+    private createLanguageOnServer(destChannel: DiscordJs.GuildChannel, channelType: "text" | "voice"): Promise<Types.System.ProcessSummary>
     {
-        channelPromise.then(
+        var deferred = q.defer<Types.System.ProcessSummary>();
+        var summary = new Types.System.ProcessSummary();
+
+        /* Create the channel for the "new" language. */
+        this.server.createChannel(this.langId, channelType).then(
             (channelResult) =>
             {
-                saveChannelTo = channelResult;
-                saveChannelTo.overwritePermissions(saveChannelTo.guild.roles.find("name", "@everyone"), Language.defaultEveryoneRolePerms).catch((error) =>
-                {
-                    console.log("Cannot expel the riffraff from " + this.langId + ": " + error);
-                });
-                saveChannelTo.overwritePermissions(saveChannelTo.guild.roles.find("name", "Dungeon Master"), Language.defaultDMRolePerms).catch((error) =>
-                {
-                    console.log("Cannot include our glorious leader in " + this.langId + ": " + error);
-                });
+                summary.InfoMessages.push('"' + this.name + '" has been introduced to the land.');
+                destChannel = channelResult;
 
-                let targetRole = saveChannelTo.guild.roles.find("name", this.langId);
+                /* Create/override role/perms on the new channel for teh assocated role */
+                let targetRoleSetUp: Promise<any> = undefined;
+                let targetRole = this.server.roles.find("name", this.langId);
                 if (!targetRole) {
-                    saveChannelTo.guild.createRole(this.langRoleData).then(
-                        (roleResult) =>
+                    this.server.createRole(this.langRoleData).then(
+                        (createNativeResult) =>
                         {
-                            saveChannelTo.overwritePermissions(roleResult, Language.defaultLangRolePerms).catch((error) =>
-                            {
-                                console.log("Cannot teach the natives: " + error);
-                            });
+                            targetRoleSetUp = destChannel.overwritePermissions(createNativeResult, Language.defaultLangRolePerms);
                         },
-                        (roleError) =>
+                        (createNativeError) =>
                         {
-                            console.log("Cannot create the natives: " + roleError);
+                            let targetRoleSetUpDefer = q.defer<Types.System.ProcessSummary>();
+                            targetRoleSetUp = targetRoleSetUpDefer.promise;
+                            targetRoleSetUpDefer.reject('Cannot create the natives "' + this.name + '": ' + createNativeError);
                         }
                     );
+                } else {
+                    targetRoleSetUp = channelResult.overwritePermissions(targetRole, Language.defaultLangRolePerms);
                 }
-                else {
-                    console.log("That role already exists.");
-                }
+                // targetRoleSetUp.catch((error) =>
+                // {
+                //     error = "Cannot set up target role for " + this.langId + ": " + error;
+                //     summary.ErrorMessages.push(error);
+                // });
+
+                /* Assign DM role perms */
+                let dmRoleSetUp = destChannel.overwritePermissions(this.server.roles.find("name", "Dungeon Master"), Language.defaultDMRolePerms);
+                dmRoleSetUp.catch((error) =>
+                {
+                    error = "Cannot include our glorious leader in " + this.langId + ": " + error;
+                    summary.ErrorMessages.push(error);
+                });
+
+                /* Assign @everyone role perms */
+                let everyoneRoleSetUp = destChannel.overwritePermissions(this.server.roles.find("name", "@everyone"), Language.defaultEveryoneRolePerms);
+                everyoneRoleSetUp.catch((error) =>
+                {
+                    error = "Cannot expel the riffraff from " + this.langId + ": " + error;
+                    summary.ErrorMessages.push(error);
+                });
+
+                /* Resolve when all role overrides are accounted for, error or not. */
+                q.all([targetRoleSetUp, dmRoleSetUp, everyoneRoleSetUp]).finally(() =>
+                {
+                    deferred.resolve(summary);
+                })
             },
             (channelError) =>
             {
-                console.log("Completely failed to create language");
+                summary.ErrorMessages.push('The land rejected "' + this.name + '": ' + channelError);
+                deferred.resolve(summary);
             }
         );
+
+        return deferred.promise;
     }
 }
